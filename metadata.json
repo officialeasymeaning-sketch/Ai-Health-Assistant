@@ -1,0 +1,8 @@
+{
+  "name": "AI Health Assistant",
+  "description": "A multimodal health assistant offering real-time consultations and symptom analysis.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
