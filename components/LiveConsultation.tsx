@@ -3,11 +3,11 @@ import { GoogleGenAI, LiveServerMessage, Modality } from '@google/genai';
 import { Mic, MicOff, PhoneOff, Video, Activity, Loader2, ShieldAlert, Radio, RefreshCw } from 'lucide-react';
 import { decodeBase64, decodeAudioData } from '../utils/audioUtils';
 
-// Use environment variable first, fallback to the specific key provided by the user
-const API_KEY = process.env.API_KEY || "AIzaSyDD6FI6qBvUiwBOIAN4huqtr00rSM75k5A";
+// Use environment variable exclusively
+const API_KEY = process.env.API_KEY;
 
 // Configuration for the Live API
-const LIVE_API_MODEL = 'gemini-2.0-flash-exp';
+const LIVE_API_MODEL = 'gemini-2.5-flash-native-audio-preview-09-2025';
 const AUDIO_SAMPLE_RATE = 16000; // Gemini expects 16kHz audio
 
 export const LiveConsultation: React.FC = () => {
