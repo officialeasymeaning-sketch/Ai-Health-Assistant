@@ -1,6 +1,6 @@
 import { GoogleGenAI, Modality } from "@google/genai";
 
-// HARDCODED KEY AS REQUESTED
+// HARDCODED KEY AS REQUESTED - ENSURING IT IS USED DIRECTLY
 const API_KEY = 'AIzaSyDD6FI6qBvUiwBOIAN4huqtr00rSM75k5A';
 
 export const getApiKey = (): string => {
@@ -17,25 +17,26 @@ const getAiClient = (): GoogleGenAI => {
   return aiInstance;
 };
 
-const SYSTEM_INSTRUCTION = `You are an expert AI Health Assistant with advanced multilingual capabilities.
+const SYSTEM_INSTRUCTION = `You are an expert AI Health Assistant.
 Analyze symptoms provided via text or images and provide detailed, professional, and empathetic health advice.
 
-**LANGUAGE DETECTION & RESPONSE PROTOCOL**:
-1. **Detect Language**: Identify if the user is communicating in English, Hindi (Devanagari script), or Hinglish.
-2. **Respond in Kind**: Respond in the SAME language as the user's input.
-3. **Consistency**: Ensure the entire response is consistent in language.
+**PROTOCOL**:
+1. **Detect Language**: Respond in the SAME language as the user (English, Hindi, or Hinglish).
+2. **Structure**: 
+   - **Summary**: 1-sentence reassurance.
+   - **Analysis**: Clear paragraphs.
+   - **Steps**: Bullet points.
+3. **Safety**: Always advise consulting a doctor.
 
-**Formatting**:
-*   **Summary**: A direct, reassuring 1-sentence summary.
-*   **Detailed Analysis**: Paragraphs with **bold** key terms.
-*   **Actionable Steps**: Bullet points.
-*   **Safety**: Always advise consulting a doctor.
+**Formatting**: Use bolding for key terms. Do not use markdown tables.
 
-**Suggested Questions**:
-At the very end, add "---SUGGESTIONS---" followed by 3 short follow-up questions separated by "|" pipe.`;
+**Ending**:
+End with "---SUGGESTIONS---" followed by 3 short follow-up questions separated by "|".`;
 
-// Optimized Model Hierarchy
-const MODEL_HIERARCHY = ['gemini-3-flash-preview', 'gemini-2.0-flash-exp'];
+// OPTIMIZED MODEL HIERARCHY FOR STABILITY
+// 1. gemini-2.0-flash-exp: Highly capable and fast.
+// 2. gemini-flash-latest: The current stable production version (fallback).
+const MODEL_HIERARCHY = ['gemini-2.0-flash-exp', 'gemini-flash-latest'];
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -62,43 +63,52 @@ export async function* generateHealthResponseStream(
     }
     if (text) parts.push({ text });
 
+    let lastError: any = null;
+
     // Model Fallback Loop
     for (const modelName of MODEL_HIERARCHY) {
-      // Retry Loop
-      for (let attempt = 0; attempt < 3; attempt++) {
+      // Retry Loop (2 attempts per model)
+      for (let attempt = 0; attempt < 2; attempt++) {
         try {
           const responseStream = await ai.models.generateContentStream({
             model: modelName, 
             contents: { parts },
-            config: { systemInstruction: SYSTEM_INSTRUCTION }
+            config: { 
+              systemInstruction: SYSTEM_INSTRUCTION,
+            }
           });
 
           for await (const chunk of responseStream) {
             if (chunk.text) yield chunk.text;
           }
-          return; // Success
+          return; // Success, exit function
 
         } catch (error: any) {
+          lastError = error;
           const msg = error.message || '';
           
-          // Retryable Errors (Rate Limit/Overload)
-          if (msg.includes('429') || msg.includes('503')) {
-            console.warn(`Model ${modelName} busy. Retrying...`);
-            await delay(1500 * (attempt + 1));
+          // Log for debugging
+          console.warn(`Attempt failed on ${modelName}:`, msg);
+
+          // Retryable Errors (Rate Limit 429 / Overload 503 / Network)
+          if (msg.includes('429') || msg.includes('503') || msg.includes('fetch')) {
+            await delay(1000 * (attempt + 1));
             continue;
           }
           
-          // Other errors: try next model
+          // If it's a 404 (Model not found) or 400 (Bad Request), break to next model
           break;
         }
       }
     }
     
-    yield "I encountered a network issue. Please check your internet connection and try again.";
+    // If we reach here, all models failed
+    console.error("All models failed:", lastError);
+    yield "I am currently experiencing high traffic or a connection issue. Please try again in a few seconds.";
 
   } catch (error: any) {
-    console.error("Stream Error:", error);
-    yield "I encountered a technical error. Please refresh and try again.";
+    console.error("Critical Stream Error:", error);
+    yield "I encountered a technical error. Please check your internet connection.";
   }
 }
 
@@ -127,6 +137,7 @@ export async function generateSpeech(text: string): Promise<string | null> {
   try {
     if (!text || text.trim().length === 0) return null;
     const ai = getAiClient();
+    // Using 2.5 for TTS as it supports the audio modality well
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash-preview-tts',
       contents: [{ parts: [{ text }] }],
