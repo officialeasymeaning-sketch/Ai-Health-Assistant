@@ -1,20 +1,35 @@
 import { GoogleGenAI, Modality } from "@google/genai";
 
-// Use environment variable if available, otherwise fall back to the provided key
-// The build process replaces process.env.API_KEY with the string value or ""
-const API_KEY = process.env.API_KEY || 'AIzaSyDD6FI6qBvUiwBOIAN4huqtr00rSM75k5A'; 
+// Hardcoded fallback key provided by user
+const FALLBACK_KEY = 'AIzaSyDD6FI6qBvUiwBOIAN4huqtr00rSM75k5A';
 
-// Singleton instance wrapper to prevent top-level initialization crashes
+/**
+ * robustly retrieves the API key.
+ * Checks process.env first. If invalid or missing, uses fallback.
+ */
+const getApiKey = (): string => {
+  let key = process.env.API_KEY;
+  
+  // Basic validation: Must start with 'AIza' to be a valid Google API key
+  if (!key || typeof key !== 'string' || !key.startsWith('AIza')) {
+    console.warn("Invalid or missing environment API_KEY, using fallback.");
+    key = FALLBACK_KEY;
+  }
+  return key.trim();
+};
+
+// Singleton instance wrapper
 let aiInstance: GoogleGenAI | null = null;
 
 const getAiClient = (): GoogleGenAI => {
   if (!aiInstance) {
-    aiInstance = new GoogleGenAI({ apiKey: API_KEY });
+    const apiKey = getApiKey();
+    aiInstance = new GoogleGenAI({ apiKey });
   }
   return aiInstance;
 };
 
-// System instruction for standard chat with Multilingual Support
+// System instruction for standard chat
 const SYSTEM_INSTRUCTION = `You are an expert AI Health Assistant with advanced multilingual capabilities.
 Analyze symptoms provided via text or images and provide detailed, professional, and empathetic health advice.
 
@@ -39,50 +54,75 @@ Analyze symptoms provided via text or images and provide detailed, professional,
 **Suggested Questions**:
 At the very end of your response, strictly add a separator line "---SUGGESTIONS---" followed by exactly 3 short, relevant follow-up questions in the SAME LANGUAGE as the response, separated by a pipe symbol "|".`;
 
+// Models to try in order of preference
+// Note: gemini-3-flash-preview is the preferred model, but we fallback to 2.0-flash-exp if it fails/is unavailable.
+const MODEL_HIERARCHY = ['gemini-3-flash-preview', 'gemini-2.0-flash-exp'];
+
 /**
- * Streams the health response chunk by chunk for faster UI feedback.
+ * Streams the health response chunk by chunk with fallback support.
  */
 export async function* generateHealthResponseStream(
   text: string, 
   imageBase64?: string
 ): AsyncGenerator<string, void, unknown> {
-  try {
-    const ai = getAiClient();
-    const parts: any[] = [];
-    
-    if (imageBase64) {
-      parts.push({
-        inlineData: {
-          mimeType: 'image/jpeg',
-          data: imageBase64
-        }
-      });
-    }
-    
-    if (text) {
-      parts.push({ text });
-    }
-
-    // Switched to 'gemini-3-flash-preview' for better reliability and speed in production/demo environments.
-    // Removed 'thinkingConfig' to avoid potential quota or stability issues with the preview features.
-    const responseStream = await ai.models.generateContentStream({
-      model: 'gemini-3-flash-preview', 
-      contents: { parts },
-      config: {
-        systemInstruction: SYSTEM_INSTRUCTION,
+  const ai = getAiClient();
+  const parts: any[] = [];
+  
+  if (imageBase64) {
+    parts.push({
+      inlineData: {
+        mimeType: 'image/jpeg',
+        data: imageBase64
       }
     });
-
-    for await (const chunk of responseStream) {
-      const chunkText = chunk.text;
-      if (chunkText) {
-        yield chunkText;
-      }
-    }
-  } catch (error) {
-    console.error("Error generating health response stream:", error);
-    yield "I encountered an error while processing your request. Please check your connection.";
   }
+  
+  if (text) {
+    parts.push({ text });
+  }
+
+  let lastError: any = null;
+
+  // Try models in sequence
+  for (const modelName of MODEL_HIERARCHY) {
+    try {
+      const responseStream = await ai.models.generateContentStream({
+        model: modelName, 
+        contents: { parts },
+        config: {
+          systemInstruction: SYSTEM_INSTRUCTION,
+        }
+      });
+
+      for await (const chunk of responseStream) {
+        const chunkText = chunk.text;
+        if (chunkText) {
+          yield chunkText;
+        }
+      }
+      // If we successfully yielded content, return immediately (don't try next model)
+      return;
+    } catch (error: any) {
+      console.error(`Model ${modelName} failed:`, error);
+      lastError = error;
+      // Continue to next model in loop
+    }
+  }
+
+  // If all models failed
+  console.error("All models failed.", lastError);
+  let errorMessage = "I encountered an error while processing your request. ";
+  
+  if (lastError?.message) {
+      if (lastError.message.includes('403')) errorMessage += "Access Denied (403). check API Key restrictions.";
+      else if (lastError.message.includes('429')) errorMessage += "Traffic is high (429). Please try again in a moment.";
+      else if (lastError.message.includes('503')) errorMessage += "Service overloaded (503).";
+      else errorMessage += `Details: ${lastError.message}`;
+  } else {
+      errorMessage += "Please check your internet connection.";
+  }
+  
+  yield errorMessage;
 }
 
 export async function generateHealthResponse(
@@ -99,9 +139,9 @@ export async function generateHealthResponse(
 export async function generateHealthQuote(): Promise<string> {
   try {
     const ai = getAiClient();
-    // Using flash for simple tasks is efficient
+    // Use the reliable fallback model for simple tasks like quotes
     const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
+      model: 'gemini-2.0-flash-exp', 
       contents: { parts: [{ text: "Generate a single, short, motivating health quote. It can be in English, Hindi, or Hinglish. No author names." }] },
     });
     return response.text?.trim() || "Health is the greatest wealth.";
@@ -112,7 +152,6 @@ export async function generateHealthQuote(): Promise<string> {
 
 /**
  * Returns the Base64 audio string.
- * The TTS model automatically adapts its pronunciation to Hindi/Hinglish/English based on the text.
  */
 export async function generateSpeech(text: string): Promise<string | null> {
   try {

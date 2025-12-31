@@ -6,22 +6,20 @@ export default defineConfig(({ mode }) => {
   // Load env file based on `mode` in the current working directory.
   // Set the third parameter to '' to load all env regardless of the `VITE_` prefix.
   const env = loadEnv(mode, (process as any).cwd(), '');
+  
+  // Ensure the key exists for the define block, even if empty
+  const apiKey = env.API_KEY || env.VITE_API_KEY || "";
 
   return {
     plugins: [react()],
     define: {
-      // Safely replace process.env.API_KEY. 
-      // If the env var is missing, it defaults to empty string, allowing the code's fallback to take over.
-      'process.env.API_KEY': JSON.stringify(env.API_KEY || env.VITE_API_KEY || ""),
-      // Polyfill process.env.NODE_ENV for libraries that might need it
-      'process.env.NODE_ENV': JSON.stringify(mode),
+      // This replacement ensures process.env.API_KEY becomes a string literal in the code
+      'process.env.API_KEY': JSON.stringify(apiKey),
     },
     build: {
-      // Increase chunk size limit to suppress warnings
       chunkSizeWarningLimit: 1000,
       rollupOptions: {
         output: {
-          // Manual chunk splitting to optimize loading and prevent single large file warnings
           manualChunks: (id) => {
             if (id.includes('node_modules')) {
               if (id.includes('react')) return 'vendor-react';
