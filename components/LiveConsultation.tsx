@@ -2,15 +2,7 @@ import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { GoogleGenAI, LiveServerMessage, Modality } from '@google/genai';
 import { Mic, MicOff, PhoneOff, Video, Activity, Loader2, ShieldAlert, Radio, RefreshCw } from 'lucide-react';
 import { decodeBase64, decodeAudioData } from '../utils/audioUtils';
-
-// Robust Key Retrieval for Component
-const getApiKey = (): string => {
-  let key = process.env.API_KEY;
-  if (!key || typeof key !== 'string' || !key.startsWith('AIza')) {
-    key = 'AIzaSyDD6FI6qBvUiwBOIAN4huqtr00rSM75k5A';
-  }
-  return key.trim();
-};
+import { getApiKey } from '../services/geminiService'; // Import the shared key logic
 
 // Configuration for the Live API
 const LIVE_API_MODEL = 'gemini-2.5-flash-native-audio-preview-09-2025';
@@ -40,12 +32,17 @@ export const LiveConsultation: React.FC = () => {
   const nextStartTimeRef = useRef<number>(0);
   const scheduledSourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
 
-  // Initialize GenAI Client lazily to prevent render crashes
+  // Initialize GenAI Client lazily
   const aiRef = useRef<GoogleGenAI | null>(null);
 
   const getAiClient = () => {
+    // Always fetch fresh key in case user updated it in modal
+    const apiKey = getApiKey();
+    if (!apiKey) throw new Error("MISSING_API_KEY");
+    
+    // Create new instance if key or instance missing
     if (!aiRef.current) {
-        aiRef.current = new GoogleGenAI({ apiKey: getApiKey() });
+        aiRef.current = new GoogleGenAI({ apiKey });
     }
     return aiRef.current;
   };
@@ -105,6 +102,7 @@ export const LiveConsultation: React.FC = () => {
         audioContextRef.current.close().catch(() => {});
         audioContextRef.current = null;
     }
+    aiRef.current = null; // Reset client on cleanup
   }, []);
 
   const handleDisconnect = useCallback(() => {
@@ -158,11 +156,10 @@ export const LiveConsultation: React.FC = () => {
         model: LIVE_API_MODEL,
         config: {
           responseModalities: [Modality.AUDIO],
-          systemInstruction: `You are an advanced, helpful, and empathetic AI Health Consultant named 'Aura'.
-          Your role is to listen to health concerns and provide professional, calm guidance.
+          systemInstruction: `You are an advanced AI Health Consultant named 'Aura'.
+          Your role is to listen to health concerns and provide professional guidance.
           Keep responses concise and conversational.
-          If the user speaks Hindi, reply in Hindi.
-          Always clarify you are an AI and not a substitute for a real doctor in emergencies.`,
+          If the user speaks Hindi, reply in Hindi.`,
           speechConfig: {
             voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } },
           },
@@ -172,9 +169,8 @@ export const LiveConsultation: React.FC = () => {
                 setIsConnected(true);
                 setIsConnecting(false);
                 setStatus('Live Session Active');
-                retryCount.current = 0; // Reset retries on success
+                retryCount.current = 0; 
                 console.log("Gemini Live Session Opened");
-                
                 setupAudioProcessing(ctx, stream, sessionPromise);
             },
             onmessage: async (message: LiveServerMessage) => {
@@ -182,35 +178,30 @@ export const LiveConsultation: React.FC = () => {
                 if (audioData) {
                    await playAudioChunk(audioData);
                 }
-                
                 if (message.serverContent?.interrupted) {
-                    console.log("Model interrupted");
                     stopAllAudio();
                 }
             },
             onclose: (e) => {
-                console.log("Session closed", e);
-                if (!isUserManualDisconnect.current) {
-                   handleAutoReconnect();
-                }
+                if (!isUserManualDisconnect.current) handleAutoReconnect();
             },
             onerror: (err) => {
                 console.error("Session error", err);
-                if (!isUserManualDisconnect.current) {
-                   handleAutoReconnect();
-                }
+                if (!isUserManualDisconnect.current) handleAutoReconnect();
             }
         }
       });
       
-      // Store session for cleanup
       sessionPromise.then(sess => {
           activeSessionRef.current = sess;
       });
 
     } catch (err: any) {
         console.error("Connection failed:", err);
-        if (!isUserManualDisconnect.current) {
+        if (err.message === "MISSING_API_KEY") {
+            setError("Missing API Key. Please set it in the Chat Settings.");
+            handleDisconnect();
+        } else if (!isUserManualDisconnect.current) {
             handleAutoReconnect();
         }
     }
@@ -220,13 +211,13 @@ export const LiveConsultation: React.FC = () => {
       if (retryCount.current < MAX_RETRIES) {
           retryCount.current += 1;
           setStatus(`Reconnecting attempt ${retryCount.current}...`);
-          cleanupSession(); // Clean internal state before retrying
+          cleanupSession();
           
           setTimeout(() => {
               if (!isUserManualDisconnect.current) {
                   connectToSession(true);
               }
-          }, 1000 + (retryCount.current * 500)); // Exponential backoff-ish
+          }, 1000 + (retryCount.current * 500));
       } else {
           setError("Network unstable. Connection dropped.");
           handleDisconnect();
@@ -236,44 +227,28 @@ export const LiveConsultation: React.FC = () => {
   const setupAudioProcessing = (ctx: AudioContext, stream: MediaStream, sessionPromise: Promise<any>) => {
     const source = ctx.createMediaStreamSource(stream);
     inputSourceRef.current = source;
-    
-    // ScriptProcessorNode is required for raw PCM streaming in real-time
     const processor = ctx.createScriptProcessor(4096, 1, 1);
     processorRef.current = processor;
 
     processor.onaudioprocess = async (e) => {
-        // Guard: Stop processing if disconnected
         if (isUserManualDisconnect.current) return;
-
-        // Auto-resume context if it gets suspended
-        if (ctx.state === 'suspended') {
-            await ctx.resume();
-        }
+        if (ctx.state === 'suspended') await ctx.resume();
 
         const inputData = e.inputBuffer.getChannelData(0);
-        
-        // CRITICAL FIX: To prevent connection drop, we MUST send data even when muted.
-        // If muted, we send a buffer of zeros (silence).
         let effectiveData = inputData;
         if (isMuted) {
             effectiveData = new Float32Array(inputData.length).fill(0);
             setVolumeLevel(0);
         } else {
-             // Volume visualization
             let sum = 0;
-            for (let i = 0; i < inputData.length; i++) {
-                sum += inputData[i] * inputData[i];
-            }
+            for (let i = 0; i < inputData.length; i++) sum += inputData[i] * inputData[i];
             setVolumeLevel(Math.sqrt(sum / inputData.length));
         }
 
-        // Send to API
         const base64Audio = processAudioInput(effectiveData, ctx.sampleRate);
         
         sessionPromise.then(async session => {
-            // Guard: Ensure session is still active/current before sending
             if (isUserManualDisconnect.current || !activeSessionRef.current) return;
-            
             try {
                 await session.sendRealtimeInput({
                     media: {
@@ -281,17 +256,9 @@ export const LiveConsultation: React.FC = () => {
                         data: base64Audio
                     }
                 });
-            } catch (err) {
-                // Suppress errors during disconnect phase
-                if (!isUserManualDisconnect.current) {
-                    console.warn("Input send error:", err);
-                }
-            }
-        }).catch(err => {
-            console.error("Session promise error:", err);
+            } catch (err) {}
         });
     };
-
     source.connect(processor);
     processor.connect(ctx.destination);
   };
@@ -303,20 +270,14 @@ export const LiveConsultation: React.FC = () => {
 
      try {
         const audioBuffer = await decodeAudioData(decodeBase64(base64Audio), ctx, 24000, 1);
-        
         const startTime = Math.max(ctx.currentTime, nextStartTimeRef.current);
-        
         const source = ctx.createBufferSource();
         source.buffer = audioBuffer;
         source.connect(outputNodeRef.current);
         source.start(startTime);
-        
         nextStartTimeRef.current = startTime + audioBuffer.duration;
-        
         scheduledSourcesRef.current.add(source);
-        source.onended = () => {
-            scheduledSourcesRef.current.delete(source);
-        };
+        source.onended = () => scheduledSourcesRef.current.delete(source);
      } catch (e) {
          console.error("Error decoding/playing audio", e);
      }
@@ -356,15 +317,11 @@ export const LiveConsultation: React.FC = () => {
 
       {/* Main Visualizer Area */}
       <div className="flex-1 relative flex flex-col items-center justify-center p-8">
-         
-         {/* Dynamic Background */}
          <div className={`absolute inset-0 transition-opacity duration-1000 ${isConnected ? 'opacity-100' : 'opacity-20'}`}>
             <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-64 h-64 bg-cyan-500/20 rounded-full blur-[80px] animate-pulse-slow"></div>
          </div>
 
-         {/* Central Interactive Element */}
          <div className="relative z-10">
-            {/* Audio Reactive Rings */}
             {isConnected && (
                 <>
                     <div className="absolute inset-0 rounded-full border border-cyan-500/30"
@@ -374,7 +331,6 @@ export const LiveConsultation: React.FC = () => {
                 </>
             )}
 
-            {/* Main Button Container */}
             <div className={`relative w-48 h-48 rounded-full flex items-center justify-center transition-all duration-500 ${
                 isConnected ? 'bg-slate-900/50 border-2 border-cyan-500/50 shadow-[0_0_50px_rgba(6,182,212,0.2)]' : 'bg-slate-800/50 border border-white/5'
             }`}>
@@ -399,7 +355,6 @@ export const LiveConsultation: React.FC = () => {
             </div>
          </div>
 
-         {/* Instructions */}
          <div className="mt-12 text-center max-w-xs relative z-10">
              {error ? (
                  <div className="flex flex-col items-center gap-2">
@@ -421,7 +376,6 @@ export const LiveConsultation: React.FC = () => {
          </div>
       </div>
 
-      {/* Control Bar */}
       <div className="p-6 bg-slate-900/80 backdrop-blur-md border-t border-white/5 z-10">
          <div className="flex gap-4">
             {!isConnected ? (

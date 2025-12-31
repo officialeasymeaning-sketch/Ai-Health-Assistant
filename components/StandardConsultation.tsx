@@ -3,7 +3,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { ChatMessage } from '../types';
 import { generateHealthResponseStream, generateSpeech } from '../services/geminiService';
-import { Image, Send, Volume2, StopCircle, Loader2, User, Bot, Sparkles, X, Paperclip, Mic, MicOff, Activity, RefreshCw, Search, Pill, HeartPulse, CheckCircle2 } from 'lucide-react';
+import { Image, Send, Volume2, StopCircle, Loader2, User, Bot, Sparkles, X, Paperclip, Mic, MicOff, Activity, RefreshCw, Search, HeartPulse, Key } from 'lucide-react';
 import { blobToBase64, decodeBase64, decodeAudioData } from '../utils/audioUtils';
 
 type AnalysisStep = 'identifying' | 'diagnosing' | 'curing' | null;
@@ -22,11 +22,14 @@ export const StandardConsultation: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [timeOfDay, setTimeOfDay] = useState('');
   const [analysisStep, setAnalysisStep] = useState<AnalysisStep>(null);
-  
   const [playingMessageId, setPlayingMessageId] = useState<string | null>(null);
   const [audioLoadingId, setAudioLoadingId] = useState<string | null>(null);
   const [isListening, setIsListening] = useState(false);
   
+  // API Key Modal State
+  const [showApiKeyModal, setShowApiKeyModal] = useState(false);
+  const [tempApiKey, setTempApiKey] = useState('');
+
   const audioContextRef = useRef<AudioContext | null>(null);
   const sourceNodeRef = useRef<AudioBufferSourceNode | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -63,6 +66,18 @@ export const StandardConsultation: React.FC = () => {
       text: "Chat cleared. How else can I assist you with your health today?",
       suggestions: ["Nutrition advice", "Exercise tips", "Yoga benefits"]
     }]);
+  };
+
+  const saveApiKey = () => {
+    if (tempApiKey.trim().startsWith('AIza')) {
+      localStorage.setItem('GEMINI_API_KEY', tempApiKey.trim());
+      setShowApiKeyModal(false);
+      setTempApiKey('');
+      // Optionally reload or just let the user retry
+      alert("API Key saved! Please try sending your message again.");
+    } else {
+      alert("Invalid API Key. It must start with 'AIza'.");
+    }
   };
 
   const handleSendMessage = async (textOverride?: string) => {
@@ -103,6 +118,13 @@ export const StandardConsultation: React.FC = () => {
       const stream = generateHealthResponseStream(userMsg.text || "Analyse this", userMsg.image);
 
       for await (const chunk of stream) {
+        // Handle Error Signals from Service
+        if (chunk === 'ACCESS_DENIED_ERROR' || chunk === 'MISSING_API_KEY_ERROR') {
+            setShowApiKeyModal(true);
+            fullAccumulatedText = "⚠️ **Action Required**: Please enter your API Key to continue.";
+            break;
+        }
+
         fullAccumulatedText += chunk;
         setMessages(prev => prev.map(msg => 
           msg.id === aiMsgId 
@@ -122,7 +144,7 @@ export const StandardConsultation: React.FC = () => {
       console.error(error);
       setMessages(prev => prev.map(msg => 
         msg.id === aiMsgId 
-          ? { ...msg, text: "Error. Please try again." } 
+          ? { ...msg, text: "I encountered an error. Please check your connection and try again." } 
           : msg
       ));
       setAnalysisStep(null);
@@ -133,7 +155,6 @@ export const StandardConsultation: React.FC = () => {
 
   const splitTextIntoChunks = (text: string): string[] => {
     const chunks: string[] = [];
-    // Added Hindi Purna Viram (।) to the split regex
     const splitRegex = /([.!?।\n]+)/; 
     const parts = text.split(splitRegex);
     let currentChunk = '';
@@ -238,7 +259,6 @@ export const StandardConsultation: React.FC = () => {
       return;
     }
     const recognition = new SpeechRecognition();
-    // Supporting Hindi and English recognition
     recognition.lang = 'hi-IN, en-US';
     recognition.interimResults = false;
     recognition.onstart = () => setIsListening(true);
@@ -266,6 +286,52 @@ export const StandardConsultation: React.FC = () => {
 
   return (
     <div className="flex flex-col h-full relative">
+      
+      {/* API Key Modal */}
+      {showApiKeyModal && (
+        <div className="absolute inset-0 z-[100] bg-slate-900/90 backdrop-blur-md flex items-center justify-center p-4">
+            <div className="bg-slate-800 border border-cyan-500/30 rounded-2xl p-6 max-w-md w-full shadow-2xl animate-in fade-in zoom-in-95">
+                <div className="flex items-center gap-3 mb-4">
+                    <div className="w-10 h-10 rounded-full bg-red-500/10 flex items-center justify-center">
+                        <Key className="text-red-400" size={20} />
+                    </div>
+                    <h2 className="text-xl font-bold text-white">Setup API Key</h2>
+                </div>
+                <p className="text-slate-300 mb-6 text-sm leading-relaxed">
+                    It looks like the server's API key is invalid or restricted. Please enter your own 
+                    <strong className="text-cyan-400"> Google Gemini API Key</strong> to make the app fully functional.
+                </p>
+                <div className="space-y-4">
+                    <input 
+                        type="password" 
+                        value={tempApiKey}
+                        onChange={(e) => setTempApiKey(e.target.value)}
+                        placeholder="Paste AIza... key here"
+                        className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-cyan-500 outline-none"
+                    />
+                    <div className="flex gap-3">
+                         <button 
+                            onClick={() => setShowApiKeyModal(false)}
+                            className="flex-1 py-3 bg-slate-700 hover:bg-slate-600 rounded-xl font-bold text-slate-300 transition-colors"
+                        >
+                            Cancel
+                        </button>
+                        <button 
+                            onClick={saveApiKey}
+                            disabled={!tempApiKey}
+                            className="flex-1 py-3 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 rounded-xl font-bold text-white shadow-lg shadow-cyan-900/20 disabled:opacity-50 transition-all"
+                        >
+                            Save & Activate
+                        </button>
+                    </div>
+                </div>
+                <p className="mt-4 text-xs text-slate-500 text-center">
+                   This key is saved locally in your browser.
+                </p>
+            </div>
+        </div>
+      )}
+
       {/* Consultation Animated Overlay */}
       {analysisStep && (
         <div className="absolute inset-0 z-50 flex items-center justify-center bg-slate-900/80 backdrop-blur-xl transition-all duration-500 animate-in fade-in">
@@ -301,10 +367,6 @@ export const StandardConsultation: React.FC = () => {
                  <div className={`h-1.5 flex-1 rounded-full transition-colors duration-500 ${analysisStep === 'diagnosing' || analysisStep === 'curing' ? 'bg-cyan-500 shadow-[0_0_10px_rgba(6,182,212,0.5)]' : 'bg-slate-700'}`}></div>
                  <div className={`h-1.5 flex-1 rounded-full transition-colors duration-500 ${analysisStep === 'curing' ? 'bg-cyan-500 shadow-[0_0_10px_rgba(6,182,212,0.5)]' : 'bg-slate-700'}`}></div>
               </div>
-
-              <div className="flex items-center gap-2 text-[10px] text-cyan-400 uppercase tracking-widest font-black animate-pulse">
-                 Processing Multimodal Request
-              </div>
            </div>
         </div>
       )}
@@ -332,27 +394,20 @@ export const StandardConsultation: React.FC = () => {
 
             <div className="flex items-center gap-3">
                  <button 
+                    onClick={() => setShowApiKeyModal(true)}
+                    className="p-2.5 rounded-lg bg-white/5 hover:bg-white/10 text-slate-400 hover:text-cyan-400 transition-all border border-transparent hover:border-cyan-500/30 group"
+                    title="Update API Key"
+                >
+                    <Key size={20} />
+                </button>
+
+                 <button 
                     onClick={handleClearChat}
                     className="p-2.5 rounded-lg bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white transition-all border border-transparent hover:border-white/10 group"
                     title="Reset Conversation"
                 >
                     <RefreshCw size={20} className="group-hover:rotate-180 transition-transform duration-700 ease-out" />
                 </button>
-                
-                <div className="hidden sm:flex items-center gap-3 pl-4 border-l border-white/10">
-                    <div className="text-right">
-                        <div className="text-xs font-bold text-white">Guest User</div>
-                        <div className="text-[10px] text-cyan-400 font-medium">Standard Plan</div>
-                    </div>
-                    <div className="relative">
-                       <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-cyan-500 to-blue-600 p-[2px]">
-                          <div className="w-full h-full rounded-full bg-slate-900 flex items-center justify-center overflow-hidden">
-                             <User size={20} className="text-slate-200" />
-                          </div>
-                       </div>
-                       <div className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 border-2 border-slate-900 rounded-full"></div>
-                    </div>
-                </div>
             </div>
         </div>
       </div>
