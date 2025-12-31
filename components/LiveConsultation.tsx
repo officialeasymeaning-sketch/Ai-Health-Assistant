@@ -36,11 +36,7 @@ export const LiveConsultation: React.FC = () => {
   const aiRef = useRef<GoogleGenAI | null>(null);
 
   const getAiClient = () => {
-    // Always fetch fresh key in case user updated it in modal
     const apiKey = getApiKey();
-    if (!apiKey) throw new Error("MISSING_API_KEY");
-    
-    // Create new instance if key or instance missing
     if (!aiRef.current) {
         aiRef.current = new GoogleGenAI({ apiKey });
     }
@@ -198,10 +194,7 @@ export const LiveConsultation: React.FC = () => {
 
     } catch (err: any) {
         console.error("Connection failed:", err);
-        if (err.message === "MISSING_API_KEY") {
-            setError("Missing API Key. Please set it in the Chat Settings.");
-            handleDisconnect();
-        } else if (!isUserManualDisconnect.current) {
+        if (!isUserManualDisconnect.current) {
             handleAutoReconnect();
         }
     }

@@ -1,43 +1,18 @@
 import { GoogleGenAI, Modality } from "@google/genai";
 
-/**
- * Robustly retrieves the API key.
- * Priority: 
- * 1. Local Storage (User override for deployed apps)
- * 2. Environment Variable (Vercel/Local)
- */
-export const getApiKey = (): string => {
-  // 1. Check Browser Local Storage
-  if (typeof window !== 'undefined') {
-    const localKey = localStorage.getItem('GEMINI_API_KEY');
-    if (localKey && localKey.length > 10) return localKey.trim();
-  }
-  
-  // 2. Check Environment Variable
-  const envKey = process.env.API_KEY;
-  if (envKey && envKey.length > 10 && envKey.startsWith('AIza')) {
-    return envKey.trim();
-  }
+// HARDCODED KEY AS REQUESTED
+const API_KEY = 'AIzaSyDD6FI6qBvUiwBOIAN4huqtr00rSM75k5A';
 
-  // Return empty to trigger "Missing Key" logic in UI
-  return '';
+export const getApiKey = (): string => {
+  return API_KEY;
 };
 
 // Singleton instance wrapper
 let aiInstance: GoogleGenAI | null = null;
-let currentKey: string | null = null;
 
 const getAiClient = (): GoogleGenAI => {
-  const apiKey = getApiKey();
-  
-  if (!apiKey) {
-    throw new Error("MISSING_API_KEY");
-  }
-
-  // Re-initialize if key changes
-  if (!aiInstance || currentKey !== apiKey) {
-    aiInstance = new GoogleGenAI({ apiKey });
-    currentKey = apiKey;
+  if (!aiInstance) {
+    aiInstance = new GoogleGenAI({ apiKey: API_KEY });
   }
   return aiInstance;
 };
@@ -77,7 +52,7 @@ export async function* generateHealthResponseStream(
   imageBase64?: string
 ): AsyncGenerator<string, void, unknown> {
   try {
-    const ai = getAiClient(); // Will throw if no key
+    const ai = getAiClient();
     const parts: any[] = [];
     
     if (imageBase64) {
@@ -87,12 +62,10 @@ export async function* generateHealthResponseStream(
     }
     if (text) parts.push({ text });
 
-    let lastError: any = null;
-
     // Model Fallback Loop
     for (const modelName of MODEL_HIERARCHY) {
       // Retry Loop
-      for (let attempt = 0; attempt < 2; attempt++) {
+      for (let attempt = 0; attempt < 3; attempt++) {
         try {
           const responseStream = await ai.models.generateContentStream({
             model: modelName, 
@@ -106,15 +79,8 @@ export async function* generateHealthResponseStream(
           return; // Success
 
         } catch (error: any) {
-          lastError = error;
           const msg = error.message || '';
           
-          // Critical Errors - Stop immediately and report
-          if (msg.includes('403') || msg.includes('API key')) {
-             yield "ACCESS_DENIED_ERROR";
-             return;
-          }
-
           // Retryable Errors (Rate Limit/Overload)
           if (msg.includes('429') || msg.includes('503')) {
             console.warn(`Model ${modelName} busy. Retrying...`);
@@ -128,18 +94,11 @@ export async function* generateHealthResponseStream(
       }
     }
     
-    // If we get here, all failed
-    throw lastError;
+    yield "I encountered a network issue. Please check your internet connection and try again.";
 
   } catch (error: any) {
     console.error("Stream Error:", error);
-    if (error.message === 'MISSING_API_KEY') {
-      yield "MISSING_API_KEY_ERROR";
-    } else if (error.message?.includes('403') || error.message?.includes('API key')) {
-      yield "ACCESS_DENIED_ERROR";
-    } else {
-      yield "I encountered a connection error. Please try again in a moment.";
-    }
+    yield "I encountered a technical error. Please refresh and try again.";
   }
 }
 
@@ -153,9 +112,6 @@ export async function generateHealthResponse(text: string, imageBase64?: string)
 
 export async function generateHealthQuote(): Promise<string> {
   try {
-    const apiKey = getApiKey();
-    if (!apiKey) return LOCAL_QUOTES[0];
-
     const ai = getAiClient();
     const response = await ai.models.generateContent({
       model: 'gemini-2.0-flash-exp', 
