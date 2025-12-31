@@ -12,7 +12,6 @@ const getApiKey = (): string => {
   
   // Basic validation: Must start with 'AIza' to be a valid Google API key
   if (!key || typeof key !== 'string' || !key.startsWith('AIza')) {
-    console.warn("Invalid or missing environment API_KEY, using fallback.");
     key = FALLBACK_KEY;
   }
   return key.trim();
@@ -54,12 +53,24 @@ Analyze symptoms provided via text or images and provide detailed, professional,
 **Suggested Questions**:
 At the very end of your response, strictly add a separator line "---SUGGESTIONS---" followed by exactly 3 short, relevant follow-up questions in the SAME LANGUAGE as the response, separated by a pipe symbol "|".`;
 
-// Models to try in order of preference
-// Note: gemini-3-flash-preview is the preferred model, but we fallback to 2.0-flash-exp if it fails/is unavailable.
-const MODEL_HIERARCHY = ['gemini-3-flash-preview', 'gemini-2.0-flash-exp'];
+// OPTIMIZED MODEL HIERARCHY
+// 1. gemini-2.0-flash-exp: Fastest, most generous rate limits for free tier.
+// 2. gemini-3-flash-preview: Newer, but sometimes strictly rate limited.
+// 3. gemini-flash-latest: Stable fallback.
+const MODEL_HIERARCHY = ['gemini-2.0-flash-exp', 'gemini-3-flash-preview', 'gemini-flash-latest'];
+
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+const LOCAL_QUOTES = [
+  "Health is the greatest wealth.",
+  "Take care of your body. It's the only place you have to live.",
+  "A healthy outside starts from the inside.",
+  "Your health is an investment, not an expense.",
+  "Wellness is the complete integration of body, mind, and spirit."
+];
 
 /**
- * Streams the health response chunk by chunk with fallback support.
+ * Streams the health response chunk by chunk with robust retry logic (Exponential Backoff).
  */
 export async function* generateHealthResponseStream(
   text: string, 
@@ -85,39 +96,53 @@ export async function* generateHealthResponseStream(
 
   // Try models in sequence
   for (const modelName of MODEL_HIERARCHY) {
-    try {
-      const responseStream = await ai.models.generateContentStream({
-        model: modelName, 
-        contents: { parts },
-        config: {
-          systemInstruction: SYSTEM_INSTRUCTION,
-        }
-      });
+    // Retry logic per model: 3 attempts with backoff
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const responseStream = await ai.models.generateContentStream({
+          model: modelName, 
+          contents: { parts },
+          config: {
+            systemInstruction: SYSTEM_INSTRUCTION,
+          }
+        });
 
-      for await (const chunk of responseStream) {
-        const chunkText = chunk.text;
-        if (chunkText) {
-          yield chunkText;
+        for await (const chunk of responseStream) {
+          const chunkText = chunk.text;
+          if (chunkText) {
+            yield chunkText;
+          }
+        }
+        // Success! Exit function entirely.
+        return;
+
+      } catch (error: any) {
+        lastError = error;
+        const isRateLimit = error.message?.includes('429') || error.status === 429;
+        const isOverloaded = error.message?.includes('503') || error.status === 503;
+
+        if (isRateLimit || isOverloaded) {
+          const waitTime = 1000 * Math.pow(2, attempt); // 1s, 2s, 4s
+          console.warn(`Model ${modelName} hit rate limit (429/503). Retrying in ${waitTime}ms...`);
+          await delay(waitTime);
+          continue; // Retry loop
+        } else {
+          // If it's a different error (e.g., 400 Bad Request), break to next model
+          console.error(`Model ${modelName} error (non-retriable):`, error);
+          break; 
         }
       }
-      // If we successfully yielded content, return immediately (don't try next model)
-      return;
-    } catch (error: any) {
-      console.error(`Model ${modelName} failed:`, error);
-      lastError = error;
-      // Continue to next model in loop
     }
   }
 
-  // If all models failed
+  // If all models and retries failed
   console.error("All models failed.", lastError);
   let errorMessage = "I encountered an error while processing your request. ";
   
   if (lastError?.message) {
-      if (lastError.message.includes('403')) errorMessage += "Access Denied (403). check API Key restrictions.";
-      else if (lastError.message.includes('429')) errorMessage += "Traffic is high (429). Please try again in a moment.";
-      else if (lastError.message.includes('503')) errorMessage += "Service overloaded (503).";
-      else errorMessage += `Details: ${lastError.message}`;
+      if (lastError.message.includes('429')) errorMessage += "Traffic is exceptionally high right now. Please wait 1 minute and try again.";
+      else if (lastError.message.includes('403')) errorMessage += "Access Denied. Please check API Key.";
+      else errorMessage += "Please check your internet connection.";
   } else {
       errorMessage += "Please check your internet connection.";
   }
@@ -139,14 +164,15 @@ export async function generateHealthResponse(
 export async function generateHealthQuote(): Promise<string> {
   try {
     const ai = getAiClient();
-    // Use the reliable fallback model for simple tasks like quotes
+    // Try to get a fresh quote
     const response = await ai.models.generateContent({
       model: 'gemini-2.0-flash-exp', 
-      contents: { parts: [{ text: "Generate a single, short, motivating health quote. It can be in English, Hindi, or Hinglish. No author names." }] },
+      contents: { parts: [{ text: "Generate a single, short, motivating health quote. No author names." }] },
     });
-    return response.text?.trim() || "Health is the greatest wealth.";
+    return response.text?.trim() || LOCAL_QUOTES[0];
   } catch (error) {
-    return "Your health is an investment, not an expense.";
+    // Fail silently to local quotes to keep UI clean
+    return LOCAL_QUOTES[Math.floor(Math.random() * LOCAL_QUOTES.length)];
   }
 }
 
@@ -158,6 +184,7 @@ export async function generateSpeech(text: string): Promise<string | null> {
     if (!text || text.trim().length === 0) return null;
     
     const ai = getAiClient();
+    // TTS usually has separate quotas, so 2.5 is generally fine
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash-preview-tts',
       contents: [{ parts: [{ text }] }],
