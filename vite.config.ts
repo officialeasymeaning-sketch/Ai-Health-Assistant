@@ -10,9 +10,28 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [react()],
     define: {
-      // This ensures process.env.API_KEY in your code is replaced with the actual value during build
-      // defaulting to "" prevents 'undefined' appearing in the code if the key is missing
+      // Safely replace process.env.API_KEY. 
+      // If the env var is missing, it defaults to empty string, allowing the code's fallback to take over.
       'process.env.API_KEY': JSON.stringify(env.API_KEY || env.VITE_API_KEY || ""),
+      // Polyfill process.env.NODE_ENV for libraries that might need it
+      'process.env.NODE_ENV': JSON.stringify(mode),
+    },
+    build: {
+      // Increase chunk size limit to suppress warnings
+      chunkSizeWarningLimit: 1000,
+      rollupOptions: {
+        output: {
+          // Manual chunk splitting to optimize loading and prevent single large file warnings
+          manualChunks: (id) => {
+            if (id.includes('node_modules')) {
+              if (id.includes('react')) return 'vendor-react';
+              if (id.includes('@google/genai')) return 'vendor-genai';
+              if (id.includes('lucide-react')) return 'vendor-icons';
+              return 'vendor-others';
+            }
+          }
+        }
+      }
     },
     server: {
       host: true

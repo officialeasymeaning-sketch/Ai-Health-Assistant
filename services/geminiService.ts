@@ -1,6 +1,7 @@
 import { GoogleGenAI, Modality } from "@google/genai";
 
 // Use environment variable if available, otherwise fall back to the provided key
+// The build process replaces process.env.API_KEY with the string value or ""
 const API_KEY = process.env.API_KEY || 'AIzaSyDD6FI6qBvUiwBOIAN4huqtr00rSM75k5A'; 
 
 // Singleton instance wrapper to prevent top-level initialization crashes
@@ -62,13 +63,13 @@ export async function* generateHealthResponseStream(
       parts.push({ text });
     }
 
-    // Using gemini-3-pro-preview for advanced health reasoning and multilingual tasks
+    // Switched to 'gemini-3-flash-preview' for better reliability and speed in production/demo environments.
+    // Removed 'thinkingConfig' to avoid potential quota or stability issues with the preview features.
     const responseStream = await ai.models.generateContentStream({
-      model: 'gemini-3-pro-preview', 
+      model: 'gemini-3-flash-preview', 
       contents: { parts },
       config: {
         systemInstruction: SYSTEM_INSTRUCTION,
-        thinkingConfig: { thinkingBudget: 32768 } 
       }
     });
 
@@ -98,12 +99,10 @@ export async function generateHealthResponse(
 export async function generateHealthQuote(): Promise<string> {
   try {
     const ai = getAiClient();
+    // Using flash for simple tasks is efficient
     const response = await ai.models.generateContent({
       model: 'gemini-3-flash-preview',
       contents: { parts: [{ text: "Generate a single, short, motivating health quote. It can be in English, Hindi, or Hinglish. No author names." }] },
-      config: {
-        thinkingConfig: { thinkingBudget: 0 }
-      }
     });
     return response.text?.trim() || "Health is the greatest wealth.";
   } catch (error) {
