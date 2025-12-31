@@ -4,7 +4,7 @@ import { Mic, MicOff, PhoneOff, Video, Activity, Loader2, ShieldAlert, Radio, Re
 import { decodeBase64, decodeAudioData } from '../utils/audioUtils';
 
 // Use environment variable exclusively
-const API_KEY = process.env.API_KEY;
+const API_KEY = process.env.API_KEY || '';
 
 // Configuration for the Live API
 const LIVE_API_MODEL = 'gemini-2.5-flash-native-audio-preview-09-2025';
@@ -34,8 +34,15 @@ export const LiveConsultation: React.FC = () => {
   const nextStartTimeRef = useRef<number>(0);
   const scheduledSourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
 
-  // Initialize GenAI Client
-  const ai = useRef(new GoogleGenAI({ apiKey: API_KEY })).current;
+  // Initialize GenAI Client lazily to prevent render crashes
+  const aiRef = useRef<GoogleGenAI | null>(null);
+
+  const getAiClient = () => {
+    if (!aiRef.current) {
+        aiRef.current = new GoogleGenAI({ apiKey: API_KEY });
+    }
+    return aiRef.current;
+  };
 
   // --- Audio Processing Helpers ---
 
@@ -140,6 +147,7 @@ export const LiveConsultation: React.FC = () => {
       setStatus('Connecting to AI...');
 
       // 3. Connect to Gemini Live API
+      const ai = getAiClient();
       const sessionPromise = ai.live.connect({
         model: LIVE_API_MODEL,
         config: {

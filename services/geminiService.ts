@@ -1,9 +1,16 @@
 import { GoogleGenAI, Modality } from "@google/genai";
 
-const API_KEY = process.env.API_KEY || ''; // Ensure this is available
+const API_KEY = process.env.API_KEY || ''; 
 
-// Initialize GenAI
-const ai = new GoogleGenAI({ apiKey: API_KEY });
+// Singleton instance wrapper to prevent top-level initialization crashes
+let aiInstance: GoogleGenAI | null = null;
+
+const getAiClient = (): GoogleGenAI => {
+  if (!aiInstance) {
+    aiInstance = new GoogleGenAI({ apiKey: API_KEY });
+  }
+  return aiInstance;
+};
 
 // System instruction for standard chat with Multilingual Support
 const SYSTEM_INSTRUCTION = `You are an expert AI Health Assistant with advanced multilingual capabilities.
@@ -38,6 +45,7 @@ export async function* generateHealthResponseStream(
   imageBase64?: string
 ): AsyncGenerator<string, void, unknown> {
   try {
+    const ai = getAiClient();
     const parts: any[] = [];
     
     if (imageBase64) {
@@ -88,6 +96,7 @@ export async function generateHealthResponse(
 
 export async function generateHealthQuote(): Promise<string> {
   try {
+    const ai = getAiClient();
     const response = await ai.models.generateContent({
       model: 'gemini-3-flash-preview',
       contents: { parts: [{ text: "Generate a single, short, motivating health quote. It can be in English, Hindi, or Hinglish. No author names." }] },
@@ -108,7 +117,8 @@ export async function generateHealthQuote(): Promise<string> {
 export async function generateSpeech(text: string): Promise<string | null> {
   try {
     if (!text || text.trim().length === 0) return null;
-
+    
+    const ai = getAiClient();
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash-preview-tts',
       contents: [{ parts: [{ text }] }],
