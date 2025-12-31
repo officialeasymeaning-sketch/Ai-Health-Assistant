@@ -3,7 +3,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { ChatMessage } from '../types';
 import { generateHealthResponseStream, generateSpeech } from '../services/geminiService';
-import { Image, Send, Volume2, StopCircle, Loader2, User, Bot, Sparkles, X, Paperclip, Mic, MicOff, Activity, RefreshCw, Search, Microbe, Pill, HeartPulse, CheckCircle2 } from 'lucide-react';
+import { Image, Send, Volume2, StopCircle, Loader2, User, Bot, Sparkles, X, Paperclip, Mic, MicOff, Activity, RefreshCw, Search, Pill, HeartPulse, CheckCircle2 } from 'lucide-react';
 import { blobToBase64, decodeBase64, decodeAudioData } from '../utils/audioUtils';
 
 type AnalysisStep = 'identifying' | 'diagnosing' | 'curing' | null;
