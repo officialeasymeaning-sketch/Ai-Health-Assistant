@@ -1,6 +1,7 @@
 import { GoogleGenAI, Modality } from "@google/genai";
 
-const API_KEY = process.env.API_KEY || ''; 
+// Use environment variable if available, otherwise fall back to the provided key
+const API_KEY = process.env.API_KEY || 'AIzaSyDD6FI6qBvUiwBOIAN4huqtr00rSM75k5A'; 
 
 // Singleton instance wrapper to prevent top-level initialization crashes
 let aiInstance: GoogleGenAI | null = null;

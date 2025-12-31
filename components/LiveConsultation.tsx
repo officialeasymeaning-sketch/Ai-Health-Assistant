@@ -3,8 +3,8 @@ import { GoogleGenAI, LiveServerMessage, Modality } from '@google/genai';
 import { Mic, MicOff, PhoneOff, Video, Activity, Loader2, ShieldAlert, Radio, RefreshCw } from 'lucide-react';
 import { decodeBase64, decodeAudioData } from '../utils/audioUtils';
 
-// Use environment variable exclusively
-const API_KEY = process.env.API_KEY || '';
+// Use environment variable if available, otherwise fall back to the provided key
+const API_KEY = process.env.API_KEY || 'AIzaSyDD6FI6qBvUiwBOIAN4huqtr00rSM75k5A';
 
 // Configuration for the Live API
 const LIVE_API_MODEL = 'gemini-2.5-flash-native-audio-preview-09-2025';
